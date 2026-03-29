@@ -1,70 +1,86 @@
 # System 06: Automated Client Communication
 
 ## 1. Executive Summary
-The Automated Client Communication (ACC) system streamlines the interaction between the recruitment agency and their hiring manager clients. It automates the generation of candidate "One-Pagers," manages feedback loops for shortlists, and provides a white-labeled portal for clients to review and approve candidates.
+The Automated Client Communication (ACC) system streamlines the interaction between the recruitment agency and hiring managers. It automates the creation of high-impact candidate "One-Pagers," manages the submission workflow, and provides a white-labeled portal for clients to review shortlists and provide real-time feedback. By removing administrative friction from the "Selling" phase, the ACC accelerates the placement cycle and improves the agency's professional image.
 
 ## 2. Problem Statement & Business Context
-Recruiters spend too much time formatting resumes, writing "sales" summaries, and chasing hiring managers for feedback. ACC reduces this friction, speeding up the "time-to-interview" and improving the professional image of the agency.
+Recruiters currently spend 20-30% of their day on "admin" tasks like reformatting resumes, drafting submission emails, and chasing hiring managers for feedback. These manual tasks delay the interview process and increase the risk of "candidate drop-off." The ACC solves this by using AI to generate punchy summaries and providing a centralized portal that makes "reviewing a candidate" as easy as clicking a button.
 
 ## 3. System Architecture Overview
-ACC is a **Template-Driven Communication Engine**.
-- **Content Generator:** Uses an LLM to summarize resumes (from System 05) into a punchy "Recruiter Note."
-- **Client Portal:** A secure, web-based dashboard where hiring managers view shortlists.
-- **Notification Bus:** Manages email/Slack alerts to clients when new candidates are ready.
+The ACC is a **Submission Lifecycle Management Engine**.
+- **One-Pager Generator:** An LLM service that synthesizes the candidate's CV (from System 05) and the recruiter's interview notes into a professional candidate profile.
+- **Magic Link Portal:** A secure, web-based dashboard for hiring managers that requires no login (secured via unique, time-limited JWTs).
+- **Feedback Loop Engine:** A real-time WebSocket service that notifies the recruiter the moment a client opens a profile or leaves a comment.
 
 ## 4. Scraping Layer (Multi-Board) / Data Acquisition
-ACC "scrapes" client-side data:
-- **Client ATS:** Syncing feedback from the client's internal systems (e.g., Lever, Workday).
-- **Communication Threads:** Ingesting feedback from email replies (via IMAP/GMAIL API).
+The ACC "scrapes" client engagement data:
+- **Portal Telemetry:** Tracking "Time-on-Profile," "Section Clicks," and "Download Events" to gauge hiring manager interest.
+- **Client ATS Feedback:** If the client has an integrated ATS (e.g., Greenhouse, Lever), the ACC pushes candidate data and pulls back status changes and interview scores.
 
 ## 5. Deduplication & Quality Filter Engine
-- **Profile Sanitization:** Automatically removes candidate contact info (Email/Phone) before sharing with clients (preventing "backdoor" hiring).
-- **Feedback Normalizer:** Converts "I like him" or "No" into structured ratings (1-5 stars) using an LLM classifier.
+- **Profile Sanitization:** Automatically removes all candidate contact details (Email, Phone, LinkedIn) to ensure compliance with the agency's fee-protection policy.
+- **Feedback Sentiment Analysis:** An LLM that categorizes client comments (e.g., "The candidate is too junior," "Let's interview them") into structured data for System 08 analytics.
 
 ## 6. Decision-Maker Linking Engine
-ACC maps candidates (from System 05) to the specific hiring manager (from System 01) through a "Submission Workflow." It ensures the *right* manager gets the *right* candidate at the *right* time.
+The ACC facilitates the final link between the candidate and the hiring manager decision-maker (from System 01). It ensures that the submission is delivered to the *correct* manager via their preferred channel (Email, Slack, or MS Teams).
 
 ## 7. Data Models & Schema
-- `ClientSubmission`: (id, job_id, candidate_id, manager_id, status, client_feedback_text, recruiter_note)
-- `ClientPortalConfig`: (company_id, logo_url, custom_domain, notification_preferences)
-- `SubmissionEvent`: (submission_id, action, timestamp, actor_id)
+- `CandidateOnePager`:
+    - `id`: UUID
+    - `candidate_id`: UUID
+    - `recruiter_summary`: Text (AI-generated)
+    - `skill_highlights`: JSONB
+    - `is_anonymized`: Boolean
+- `ClientSubmission`:
+    - `id`: UUID
+    - `job_id`: UUID
+    - `manager_id`: UUID
+    - `portal_token`: String (Magic Link JWT)
+    - `status`: Enum (SENT, OPENED, REVIEWED, FEEDBACK_RECEIVED)
+    - `client_notes`: Text
 
 ## 8. Workflow Diagrams (ASCII)
 ```text
-[ Top Candidates ] -> [ AI Summary Gen ] -> [ Submission Email ]
-                                                    |
-                                            (Click to Portal)
-                                                    |
-                                            v Client Review v
-                                                    |
-                                            [ Feedback Loop ] -> [ System 07 ]
+[ Shortlisted Candidate ] --- (LLM) ---> [ One-Pager Generator ]
+                                                |
+                                          v Sanitizer v
+                                                |
+[ CRM Submission ] --- (JWT Gen) ---> [ Magic Link Email ]
+                                                |
+[ Client Dashboard ] <--- (WebSocket) --- [ Hiring Manager Interaction ]
+      |
+      v
+[ Feedback Event ] ---> [ System 07 Scheduler ]
+      |
+      v
+[ Dashboard / System 08 ]
 ```
 
 ## 9. Tech Stack & Tools
-- **Portal:** React / Tailwind CSS.
-- **Backend:** Node.js (Express) or Python (Django).
-- **Messaging:** SendGrid (Email), Slack Webhooks.
-- **Summarization:** OpenAI GPT-4o (for high-quality professional writing).
+- **Frontend:** Next.js / Tailwind CSS (White-labeled portal).
+- **Backend:** Node.js (FastAPI) or Go.
+- **Magic Links:** JSON Web Tokens (JWT) with short TTL (72h).
+- **Notifications:** SendGrid / Postmark / Slack Webhooks.
 
 ## 10. Anti-Bot Evasion Strategy (Evasion & Resilience)
-- **Link Security:** Unique, time-limited, and trackable "Magic Links" for client access.
-- **Email Deliverability:** Monitoring sender reputation to ensure client submissions don't end up in spam.
-- **Rate-Limited Notifications:** Grouping multiple candidate submissions into a single daily digest to avoid "inbox fatigue."
+- **Link Security:** Magic links are single-device bound and include IP-address whitelisting options for sensitive clients.
+- **Email Reputation:** Ensuring submission emails don't hit the hiring manager's spam filter by using dedicated sub-domains and strict DMARC/BIMI enforcement.
+- **Rate-Limiting Notifications:** Digesting multiple candidate submissions into a single daily alert to prevent "inbox fatigue."
 
 ## 11. Legal & Compliance Considerations
-- **Data Privacy:** Ensuring candidates' PII is only shared with authorized clients.
-- **Audit Trail:** Maintaining a record of who viewed which candidate and when (crucial for fee disputes).
-- **Terms of Service:** Clearly stating the agency's ownership of the candidate lead during the submission phase.
+- **PII Redaction:** Strict enforcement of contact-info redaction for non-exclusive candidates.
+- **Data Retention:** Automatically expiring portal links and anonymizing candidate data after a placement is made or the job is closed.
+- **Audit Logging:** Every view and feedback event is logged with a timestamp for potential fee disputes.
 
 ## 12. MVP vs. Production Scope
-- **MVP:** Automated "Recruiter Note" generation and manual email submissions.
-- **Production:** Full white-labeled client portal with interactive feedback and integrated scheduling.
+- **MVP:** Automated One-Pager generation; email-based feedback; basic JWT-secured portal.
+- **Production:** Full white-labeling (client branding); real-time WebSocket notifications; automated Slack/Teams integrations; two-way ATS sync with the client's internal system.
 
 ## 13. Error Handling & Resilience
-- **Recall Capability:** Allowing recruiters to "Un-submit" a candidate if an error is found.
-- **Notification Retries:** If a client's mail server bounces, notifying the recruiter via an internal alert.
+- **Link Recall:** Ability for the recruiter to "kill" a magic link if a submission was made in error.
+- **Feedback Fallback:** If the client replies to the email rather than using the portal, an LLM-based "Email-to-Feedback" parser updates the system status.
 
 ## 14. Performance & Scale Targets
-- **Submission Speed:** < 5 minutes from candidate shortlist to client submission.
-- **Feedback Latency:** Real-time sync between the client portal and the agency's internal dashboard.
-- **User Satisfaction:** > 4.5/5 client rating for the submission experience.
+- **Submission Latency:** < 5 minutes from "Shortlist Approval" to "Client Inbox."
+- **Portal Performance:** < 300ms page-load time for global hiring managers.
+- **Feedback Loop:** Sub-second sync between client action and recruiter dashboard notification.

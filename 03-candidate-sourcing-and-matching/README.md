@@ -1,71 +1,85 @@
 # System 03: AI Candidate Sourcing & Matching
 
 ## 1. Executive Summary
-The AI Candidate Sourcing & Matching (AICSM) system is the core intelligence hub for finding talent. It takes job descriptions (from System 02) and automatically identifies, evaluates, and ranks potential candidates from external sources and internal databases using semantic search and vector embeddings.
+The AI Candidate Sourcing & Matching (AICSM) system is the intelligent core of ARECA OS. It automates the discovery and evaluation of candidates by mapping multi-source talent data against live job descriptions. Using a high-fidelity Vector RAG (Retrieval-Augmented Generation) pipeline, AICSM identifies the "Top 1% Fit" for any role, regardless of whether they are in the internal database or on external professional networks.
 
 ## 2. Problem Statement & Business Context
-Recruiters spend hours searching LinkedIn and job boards using rigid Boolean strings. AICSM replaces this with "Semantic Intent Matching," allowing recruiters to describe a role in natural language and receive a ranked list of candidates who are a contextual fit, not just a keyword match.
+Recruiters currently spend 60-70% of their time manually searching LinkedIn using rigid Boolean strings that fail to capture semantic nuances (e.g., matching a "Node.js Expert" with a "Javascript Backend Lead"). AICSM solves this by shifting from "Keyword Matching" to "Intent-Based Matching," drastically reducing time-to-shortlist and surfacing overlooked high-potential candidates.
 
 ## 3. System Architecture Overview
-AICSM is built around a **Retrieval-Augmented Generation (RAG)** architecture.
-- **Embedding Engine:** Converts job descriptions and resumes into high-dimensional vectors.
-- **Vector Database:** Stores and indexes candidate profiles for fast similarity searches.
-- **Re-Ranker:** A secondary, more expensive LLM pass that evaluates the top 50 matches for specific nuances (e.g., career progression, tech stack depth).
+The AICSM is a **Bi-Encoder + Cross-Encoder Semantic Search** pipeline.
+- **Bi-Encoder Stage:** Uses OpenAI `text-embedding-3-large` to embed all candidates and jobs into a high-dimensional vector space. Initial retrieval is performed using Cosine Similarity in a vector database.
+- **Cross-Encoder Stage (Re-Ranking):** The top 100 retrieved candidates are passed to a more expensive Cross-Encoder (GPT-4o) that performs a deep, contextual comparison between the full CV and the JD.
+- **Vector DB:** Pinecone (Serverless) or Milvus for sub-second retrieval.
 
 ## 4. Scraping Layer (Multi-Board) / Data Acquisition
-AICSM interfaces with:
-- **Professional Networks:** LinkedIn, Xing, Viadeo.
-- **Technical Portfolios:** GitHub (for code quality), Stack Overflow.
-- **Niche Communities:** Kaggle (Data Science), Behance (Design).
-- **Aggregated APIs:** People Data Labs, Clearbit (for profile enrichment).
+AICSM sources data from:
+- **Professional Social Graphs:** LinkedIn (via Talent API or Scraper), GitHub (Code complexity/contributions), StackOverflow (Reputation).
+- **Public Talent Registries:** Kaggle, Behance, Dribbble.
+- **B2B Enrichment APIs:** People Data Labs (PDL), Clearbit, Apollo (to refresh work history).
 
 ## 5. Deduplication & Quality Filter Engine
-- **Cross-Platform Merging:** Uses fuzzy matching and email hashing to merge a candidate's GitHub, LinkedIn, and internal ATS profiles into a "Golden Profile."
-- **Bot/Spam Filtering:** Identifies and excludes low-quality or "bot-generated" profiles.
-- **Work History Validation:** Checks for logical inconsistencies in employment dates.
+- **Golden Profile Merging:** Uses a weighted Levenshtein distance and email/social-link hashing to unify profiles (e.g., merging a candidate's GitHub projects with their LinkedIn employment history).
+- **Signal-to-Noise Filter:** Automatically discards "Bot Profiles," "Keyword Stuffers," and candidates with significant unverifiable gaps in employment.
 
 ## 6. Decision-Maker Linking Engine
-While other systems link jobs to hiring managers, AICSM links candidates to specific open roles based on "fit scores." It identifies which hiring manager (from System 01) would be most interested in a specific high-value candidate ("Most Placeable Candidate" or MPC).
+AICSM links high-value candidates ("Most Placeable Candidates" or MPCs) to hiring managers identified in System 01. It uses predictive modeling to suggest which companies (even those without active roles) would be a high-probability fit for a specific candidate's unique profile.
 
 ## 7. Data Models & Schema
-- `CandidateVector`: (candidate_id, embedding_vector, last_updated)
-- `MatchScore`: (job_id, candidate_id, score, match_reasoning_json)
-- `GoldenProfile`: (id, full_name, current_title, skills_list, experience_years, locations, contact_info_encrypted)
+- `CandidateEmbedding`:
+    - `candidate_id`: UUID
+    - `vector`: Float[] (3072 dimensions)
+    - `metadata`: JSONB (Title, Years of Exp, Location, Tech Stack)
+    - `last_embedded_at`: DateTime
+- `MatchResult`:
+    - `id`: UUID
+    - `job_id`: UUID
+    - `candidate_id`: UUID
+    - `semantic_score`: Float (0.0 - 1.0)
+    - `reasoning_summary`: Text (AI-generated explanation of the fit)
 
 ## 8. Workflow Diagrams (ASCII)
 ```text
-[ Job Desc ] -> [ Vectorize ] -> [ Vector Search (Top 100) ]
-                                        |
-                                [ LLM Re-Ranker (Top 20) ]
-                                        |
-                                [ Ranked Candidate List ] -> [ Dashboard ]
+[ Raw Job Description ]
+      |
+      v
+[ OpenAI Embedding ]
+      |
+      v
+[ Pinecone Vector Search ] <--- (Initial Retrieve) --- [ Candidate Vector DB ]
+      |
+      v
+[ GPT-4o Cross-Encoder ] <--- (Top 100 Candidates)
+      |
+      v
+[ Ranked Shortlist ] --- (Reasoning) ---> [ System 06 Dashboard ]
 ```
 
 ## 9. Tech Stack & Tools
-- **Vector DB:** Pinecone or Milvus.
 - **Embeddings:** OpenAI `text-embedding-3-large`.
-- **Logic:** Python (LangChain, Pydantic).
-- **Search:** Elasticsearch for hybrid (keyword + semantic) search.
+- **Vector Database:** Pinecone or Milvus.
+- **Orchestration:** LangChain / LlamaIndex.
+- **Search:** Hybrid Search (Vector + BM25 keyword search via Elasticsearch).
 
 ## 10. Anti-Bot Evasion Strategy
-- **Headless API Interaction:** Prioritizing official APIs (LinkedIn Talent Solutions) where possible.
-- **Rate-Limited Crawling:** For secondary sources (GitHub), using personal access tokens and respecting rate limits.
-- **Session Persistence:** Maintaining browser sessions to avoid frequent re-logins.
+- **Headless Browser Rotation:** Rotating between real user-agent strings and viewport sizes for LinkedIn/GitHub scraping.
+- **Session Throttling:** Mimicking natural human "reading" patterns (pausing on profiles for 3-15 seconds).
+- **Social Graph Mimicry:** For LinkedIn, interacting with the "People Also Viewed" section to stay within standard usage patterns.
 
 ## 11. Legal & Compliance Considerations
-- **Fairness & Bias:** Regular auditing of the ranking engine to ensure it doesn't discriminate based on gender, age, or ethnicity (using bias-detection libraries).
-- **GDPR:** "Right to be Forgotten" implementation for candidates.
-- **CCPA:** Transparency in how candidate data is sourced and used for ranking.
+- **Algorithmic Fairness:** Auditing the embedding model to ensure it doesn't favor specific demographics (e.g., gender or age-based bias).
+- **GDPR Article 17 (Right to Erasure):** Ensuring that when a candidate is deleted, their vector embedding is also purged from the index.
+- **CCPA:** Providing transparency to candidates on how they were ranked or sourced.
 
 ## 12. MVP vs. Production Scope
-- **MVP:** Semantic search over internal database + 1 external source (GitHub).
-- **Production:** Multi-source ingestion, real-time re-ranking, and automated "MPC" identification.
+- **MVP:** Semantic search on 10k internal profiles; simple cosine similarity; single external source (LinkedIn).
+- **Production:** Hybrid search on 1M+ profiles; real-time Cross-Encoder re-ranking; multi-source ingestion (GitHub/Behance/PDL); automated MPC identification.
 
 ## 13. Error Handling & Resilience
-- **Fallback to Keyword Search:** If the Vector DB or Embedding API is down, the system reverts to traditional Boolean search.
-- **Stale Data Alerts:** Notifies recruiters if a high-ranking candidate's profile hasn't been updated in > 1 year.
+- **Re-Embedding Queue:** Retrying embedding tasks if the OpenAI API is down or throttled.
+- **Fallback to Keyword:** If the Vector DB is unavailable, the system automatically falls back to standard Elasticsearch Boolean search to ensure continuity.
 
 ## 14. Performance & Scale Targets
-- **Search Latency:** < 2 seconds for semantic retrieval across 1M+ profiles.
-- **Re-Ranking Time:** < 10 seconds for the top 50 profiles.
-- **Match Precision:** > 80% (top 5 candidates are relevant to the job).
+- **Search Latency:** < 1.5 seconds for the top 100 candidates.
+- **Re-Ranking Latency:** < 5 seconds for the top 20 candidates.
+- **Match Precision:** > 90% relevance in the top 10 results.

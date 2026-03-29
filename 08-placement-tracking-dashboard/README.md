@@ -1,70 +1,84 @@
 # System 08: Placement Tracking Dashboard / Control Tower
 
 ## 1. Executive Summary
-The Placement Tracking Dashboard (PTD) is the "Command Center" of ARECA OS. It provides real-time visibility into the entire recruitment funnel, from market signal to final placement. It aggregates data from all 7 other systems into a single, unified view for recruiters and managers.
+The Placement Tracking Dashboard (PTD) is the "Control Tower" of ARECA OS. It provides real-time visibility into the entire recruitment funnel, from market signal to final placement. By aggregating data from all 7 other systems into a single, unified view, the PTD enables recruiters to manage their pipeline more effectively and allows agency leadership to track high-level KPIs like Revenue, Conversion Rates, and Time-to-Hire.
 
 ## 2. Problem Statement & Business Context
-Recruitment agencies often suffer from "data silos" across different tools (ATS, LinkedIn, Excel). PTD solves this by providing a "Single Source of Truth," allowing the agency to track KPIs (e.g., Time-to-Hire, Placement Revenue) and optimize their operations.
+Recruitment data is often siloed across multiple tools (ATS, LinkedIn, Email, Spreadsheets). These silos make it difficult to get a real-time view of the business, leading to missed opportunities and slow operational response. The PTD solves this by creating a "Single Source of Truth," providing actionable insights that drive better decision-making at every stage of the funnel.
 
 ## 3. System Architecture Overview
-PTD is a **Data Aggregator and Visualization Layer**.
-- **Data Ingester:** Consumes events from the ARECA OS message bus.
-- **Analytics Engine:** Computes real-time metrics (e.g., Funnel conversion rates).
-- **Dashboard UI:** A high-performance web interface with real-time updates (WebSockets).
+The PTD is a **Real-Time Data Aggregation and Analytics Layer**.
+- **Event Bus Ingester:** A Go-based service that consumes state-change events (e.g., "Lead Created," "Candidate Shortlisted," "Interview Booked") from the ARECA OS message bus (RabbitMQ/Redis).
+- **OLAP Data Store:** ClickHouse or DuckDB for high-speed analytical queries on millions of historical events.
+- **WebSocket Gateway:** A real-time service (Socket.io) that pushes dashboard updates to connected recruiter UIs without requiring page refreshes.
 
 ## 4. Scraping Layer (Multi-Board) / Data Acquisition
-PTD "scrapes" or ingests:
-- **ARECA OS Event Logs:** From Systems 01 through 07.
-- **Financial Data:** Ingesting placement fees and revenue from accounting tools (Xero/QuickBooks).
+The PTD "scrapes" internal system data:
+- **System Event Logs:** Continuous ingestion of events from Systems 01-07.
+- **Financial Data:** Syncing with external accounting tools (Xero, QuickBooks) to track placement fees, invoices, and accounts receivable.
+- **Recruiter Productivity:** Tracking system interaction metrics (e.g., number of CVs reviewed, number of client submissions).
 
 ## 5. Deduplication & Quality Filter Engine
-- **Metric Verification:** Ensures that a single placement isn't counted twice if a candidate applies to multiple roles.
-- **Outlier Detection:** Flags placements with unusually high/low fees for manual review.
+- **Funnel Consistency Check:** Ensuring that the funnel metrics are logically consistent (e.g., a candidate cannot have an "Interview Booked" without being "Shortlisted").
+- **Financial Reconciliation:** Comparing the "Estimated Fee" in ARECA OS with the "Actual Invoiced Fee" in the accounting system to identify discrepancies.
 
 ## 6. Decision-Maker Linking Engine
-PTD provides the "Top-Down" view of all links made in System 01-07. It shows which Hiring Managers (from System 01) are the most active and which candidates (from System 03) are the most "placeable."
+The PTD provides a macro-view of the "Decision-Maker" graph. It identifies which hiring managers and companies have the highest conversion rates and which specific signals (from System 01) are the most predictive of a successful placement.
 
 ## 7. Data Models & Schema
-- `KPI_Report`: (id, type, value, timestamp, segment_id)
-- `PlacementRecord`: (id, candidate_id, client_id, job_id, fee_amount, start_date, status)
-- `AuditLog`: (id, system_id, event_type, payload_json, created_at)
+- `PipelineEvent`:
+    - `id`: UUID
+    - `system_id`: Enum (01-07)
+    - `event_type`: String (e.g., "SUBMISSION_FEEDBACK_RECEIVED")
+    - `payload`: JSONB (Event metadata)
+    - `created_at`: DateTime (ClickHouse Partition Key)
+- `KPI_Report`:
+    - `report_type`: Enum (TIME_TO_HIRE, CONVERSION_RATE, REVENUE_BY_DESK)
+    - `segment_id`: UUID (Team or Recruiter ID)
+    - `metric_value`: Float
+    - `computed_at`: DateTime
 
 ## 8. Workflow Diagrams (ASCII)
 ```text
-[ System 01-07 ] -> [ Event Bus ] -> [ Data Warehouse ]
-                                            |
-                                    (Metrics Engine)
-                                            |
-                                    v Real-Time UI v
-                                            |
-                                    [ Control Tower Dashboard ]
+[ Systems 01-07 ] --- (State Change Event) ---> [ Event Bus (Redis) ]
+                                                     |
+                                               v Event Ingester v
+                                                     |
+[ ClickHouse OLAP ] <--- (Batch Insert) --- [ Pipeline Data Warehouse ]
+                                                     |
+[ Analytics Engine ] --- (Aggregation) ---> [ KPI Data Store (Redis) ]
+                                                     |
+[ Dashboard UI ] <--- (WebSocket/GraphQL) --- [ Real-Time Gateway ]
+      |
+      v
+[ Recruiter Workspace ]
 ```
 
 ## 9. Tech Stack & Tools
-- **UI:** React / Next.js / Chart.js / D3.js.
-- **Analytics:** DuckDB or ClickHouse (for fast analytical queries).
-- **Real-time:** Socket.io or AWS AppSync (GraphQL Subscriptions).
-- **Orchestration:** Prefect or Airflow for batch processing of historical data.
+- **UI:** Next.js / Tailwind CSS / D3.js (Visualizations).
+- **Analytics:** ClickHouse (OLAP) / Redis (Real-time metrics).
+- **Orchestration:** Prefect (Workflow management for historical re-computation).
+- **Real-time:** Socket.io or GraphQL Subscriptions.
 
 ## 10. Anti-Bot Evasion Strategy (Evasion & Resilience)
-- **Rate-Limited Dashboards:** Ensuring complex analytical queries don't overwhelm the production database.
-- **Data Security:** Using row-level security (RLS) to ensure recruiters only see data relevant to their specific desk/team.
-- **Caching:** Using Redis to cache expensive KPI calculations.
+- **Rate-Limited Analytical Queries:** Using a "Query Proxy" to ensure complex, heavy reports don't impact the performance of the production transactional database.
+- **Row-Level Security (RLS):** Ensuring recruiters only see data and KPIs for the specific desks they are authorized to manage.
+- **CDN Caching:** Caching common report structures (e.g., "Monthly Revenue") at the edge to reduce backend load.
 
 ## 11. Legal & Compliance Considerations
-- **Retention:** Deleting PII from historical reports after the required retention period.
-- **Anonymization:** Providing aggregate reports (e.g., "Average Fee by Location") without exposing individual candidate or client data.
-- **Reporting:** Generating EEO-1 and other diversity reports automatically.
+- **PII Anonymization:** In high-level reports, candidate and client data is anonymized to comply with data privacy regulations.
+- **Audit Trails:** Maintaining a non-mutable log of all critical state changes (especially financial and placement events) for legal and financial auditing.
+- **Retention Policies:** Automatically archiving event logs older than 7 years (per financial regulations).
 
 ## 12. MVP vs. Production Scope
-- **MVP:** Static dashboard with daily data updates and basic funnel metrics.
-- **Production:** Real-time WebSockets, advanced predictive analytics (e.g., "Probability of Placement"), and full financial integration.
+- **MVP:** Daily static reports; simple funnel conversion; PostgreSQL-based analytics.
+- **Production:** Real-time (WebSocket) updates; advanced predictive analytics (e.g., "Lead Probability Score"); ClickHouse-based OLAP for sub-second reporting on large datasets; full financial tool integration.
 
 ## 13. Error Handling & Resilience
-- **Data Reconciliation:** Regularly comparing the dashboard's "truth" against the source systems (01-07) to detect discrepancies.
-- **Stale Data Warning:** Visually flagging any metric that hasn't been updated in > 24 hours.
+- **Event Replay:** The ability to "Replay" events from the message bus into the data warehouse in case of an ingestion failure.
+- **Data Freshness Monitor:** Alerting the engineering team if the dashboard's "Last Updated" timestamp lags behind the live system by more than 5 minutes.
 
 ## 14. Performance & Scale Targets
-- **UI Latency:** < 500ms for initial dashboard load.
-- **Query Performance:** < 2 seconds for any historical report (1M+ rows).
-- **Data Refresh:** Real-time (sub-second) for live pipeline events.
+- **Initial Load:** < 500ms for the main dashboard.
+- **Analytical Query Performance:** < 1 second for reports on 1M+ event records.
+- **Data Latency:** < 5 seconds from system event to dashboard update.

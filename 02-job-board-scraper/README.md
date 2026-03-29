@@ -1,73 +1,95 @@
 # System 02: Intelligent Job Board Scraper
 
 ## 1. Executive Summary
-The Intelligent Job Board Scraper (IJBS) is the primary engine for high-volume job data acquisition. It provides a clean, normalized stream of job listings to the rest of ARECA OS, acting as the foundation for candidate matching and market analysis.
+The Intelligent Job Board Scraper (IJBS) is the primary engine for high-volume, cross-platform job data acquisition. It provides a clean, normalized, and schema-validated stream of job listings to ARECA OS. By utilizing distributed workers and advanced anti-bot evasion, the IJBS ensures a comprehensive view of the market while maintaining high data integrity.
 
 ## 2. Problem Statement & Business Context
-Manually monitoring dozens of job boards is impossible at scale. IJBS automates this by providing a programmatic interface to otherwise unstructured web data. The business context is to ensure ARECA OS always has the most current and comprehensive "map" of the available job market.
+Job market data is fragmented across hundreds of job boards, each with unique HTML structures, anti-bot mechanisms, and data schemas. Manually monitoring these is impossible at scale. The IJBS automates this, ensuring that ARECA OS has a real-time, deduplicated map of all relevant job openings, which directly feeds into the sourcing and matching engines.
 
 ## 3. System Architecture Overview
-IJBS follows a **Distributed Worker Pattern**.
-- **Scraper Controller:** Manages job queues and schedules.
-- **Scraper Workers:** Individual nodes running headless browsers or API clients.
-- **Normalization Engine:** Converts platform-specific HTML into a standard JSON schema.
+The IJBS is a **Distributed Crawler Grid** with a decoupled normalization layer.
+- **Scraper Controller:** A Node.js service that manages the job queue (Redis) and assigns tasks to workers based on site-specific health metrics.
+- **Worker Pool:** Containerized Playwright/Puppeteer instances that execute the scraping scripts. Each worker uses a unique session and proxy identity.
+- **Normalization Engine:** A Python-based service that uses Pydantic models and LLM-assisted extraction for non-standard HTML structures.
 
 ## 4. Scraping Layer (Multi-Board)
-The scraping layer is designed for modularity, with "adapters" for:
-- **Major Boards:** LinkedIn, Indeed, ZipRecruiter, Monster.
-- **Niche Boards:** Dice (Tech), Behance (Creative), Dribbble.
-- **Aggregators:** Adzuna, Jooble.
-- **ATS Career Portals:** Workday, Greenhouse, Lever.
+The scraper uses a "Provider-Adapter" pattern for modularity:
+- **Direct API Adapters:** For platforms with official APIs (e.g., Reed.co.uk, Adzuna).
+- **DOM-Based Adapters:** Custom CSS/XPath-based scrapers for major sites (LinkedIn, Indeed).
+- **LLM-Based Extraction:** For niche sites where DOM structures change frequently. The system sends a subset of the HTML to an LLM to extract fields like `salary`, `remote_status`, and `tech_stack`.
 
 ## 5. Deduplication & Quality Filter Engine
-- **Duplicate Detection:** MinHash or SimHash for identifying the same job posted across multiple boards.
-- **Quality Scoring:** Flags listings with missing descriptions, suspicious salary ranges, or "phantom" roles.
-- **Freshness Check:** Verifies if a listing is still active by performing a "head" request to the source URL.
+- **Content Hashing:** Uses SimHash on normalized job descriptions to identify duplicates across different boards.
+- **Data Completeness Filter:** Discards listings that are missing critical fields like `title`, `company`, or `location`.
+- **"Phantom" Job Detection:** Flags jobs that have been posted for > 90 days or have been repeatedly refreshed without changes to the description.
 
 ## 6. Decision-Maker Linking Engine
-While DIS (System 01) focuses on broad market signals, IJBS provides the specific job context (IDs, descriptions) that triggers the linking engine. It extracts hiring manager names directly from job descriptions when available.
+The IJBS extracts hiring manager names, department names, and recruiter contact info directly from the job description or metadata. This data is passed to System 01's linking engine for enrichment and CRM mapping.
 
 ## 7. Data Models & Schema
-- `JobListing`: (id, board_source, source_url, company_name, title, location, description_raw, description_cleaned, salary_range, employment_type, date_posted, date_scraped)
-- `PlatformConfig`: (id, board_name, base_url, scraper_type, retry_limit, status)
+- `RawScrapeTask`:
+    - `id`: UUID
+    - `source_id`: String (e.g., "indeed_uk")
+    - `target_url`: URL
+    - `retry_count`: Integer
+    - `status`: Enum (PENDING, ACTIVE, COMPLETED, FAILED)
+- `NormalizedJob`:
+    - `id`: UUID (Hash of source_id + external_id)
+    - `external_id`: String (Original board ID)
+    - `title`: String
+    - `description`: Text
+    - `salary_min/max`: Decimal
+    - `is_remote`: Boolean
+    - `tech_stack`: String[]
+    - `posted_at`: DateTime
 
 ## 8. Workflow Diagrams (ASCII)
 ```text
-[ Scraper Controller ] -> [ Worker Pool ] -> [ Multi-Platform Scraper ]
-                                                    |
-                                            (Raw HTML / JSON)
-                                                    |
-                                            v Normalization v
-                                                    |
-                                            [ Job Store / Bus ]
+[ Scraper Controller ]
+      |
+      v
+[ BullMQ Queue (Redis) ]
+      |
+      v
+[ Worker Node (Playwright) ] --- (Raw HTML) ---> [ S3 Bucket ]
+      |
+      v
+[ Normalization Engine ] <--- (Pydantic Models) --- [ Field Mapping ]
+      |
+      v
+[ Deduplication Engine ] --- (SimHash Compare) ---> [ Job Store (PG) ]
+      |
+      v
+[ Event Bus ] ---> (Job Created Event)
 ```
 
 ## 9. Tech Stack & Tools
-- **Runtime:** Node.js / Playwright (for dynamic content).
-- **Orchestration:** BullMQ or RabbitMQ.
-- **Proxy Management:** Zyte or SmartProxy.
-- **Parser:** Python (BeautifulSoup) or LLM-based extraction for complex sites.
+- **Runtime:** Node.js (Controller) / Python (Normalization).
+- **Libraries:** Playwright, Pydantic, Beautiful Soup.
+- **Infrastructure:** Docker / Kubernetes (Auto-scaling worker pool).
+- **Proxy Management:** Zyte Smart Proxy Manager / Bright Data.
 
 ## 10. Anti-Bot Evasion Strategy
-- **Fingerprint Randomization:** Overriding navigator properties and WebGL fingerprints.
-- **Behavioral Simulation:** Randomized mouse movements, scrolling, and click delays.
-- **CAPTCHA Solving:** Integration with 2Captcha or similar services for unavoidable blocks.
+- **Fingerprint Randomization:** Randomized `Canvas`, `WebGL`, and `Audio` fingerprints via `playwright-extra`.
+- **TLS Handshake Spoofing:** Mimicking specific browser TLS fingerprints to bypass JA3-based blocking.
+- **Human-Like Navigation:** Randomized scrolling, mouse movement (Bezier curves), and variable click durations.
+- **Proxy Tunneling:** Automatic rotation between Data Center, Residential, and Mobile IPs based on site resistance.
 
 ## 11. Legal & Compliance Considerations
-- **Public Domain Data:** Only scraping data that does not require an account.
-- **Rate Limiting:** Ensuring scrapers do not overwhelm source sites (good citizen policy).
-- **Data Sovereignty:** Compliance with local data scraping laws (e.g., hiQ vs. LinkedIn).
+- **hiQ vs. LinkedIn Precedent:** Scraping public-facing data only.
+- **CFAD (Computer Fraud and Abuse Act):** Avoiding scraping behind logins without explicit permission.
+- **Data Sovereignty:** Storing job data in the region where it was scraped to comply with local data laws.
 
 ## 12. MVP vs. Production Scope
-- **MVP:** 3-4 major job boards, single-node worker.
-- **Production:** 20+ boards, globally distributed worker pool, advanced evasion, and CAPTCHA solving.
+- **MVP:** 5 major job boards; single-region proxy; basic Regex-based parsing.
+- **Production:** 50+ job boards; multi-region global proxy mesh; LLM-assisted normalization; real-time phantom job detection.
 
 ## 13. Error Handling & Resilience
-- **Shadowing:** Comparing scraped data against known "truth" sets to detect silent failures.
-- **Dead Letter Queues:** Isolating failed scrape tasks for manual inspection.
-- **Self-Healing:** Automatically restarting workers that encounter persistent blocks.
+- **Exponential Backoff:** Retrying failed scrapes with increasing delays.
+- **Circuit Breaker:** Automatically pausing all scrapers for a specific domain if the "Blocked Rate" exceeds 20%.
+- **Schema Drift Detection:** Alerting when the percentage of "unmapped" fields in a specific board increases suddenly.
 
 ## 14. Performance & Scale Targets
-- **Throughput:** 50,000+ listings scraped and normalized per day.
-- **Accuracy:** > 95% correctly parsed fields (salary, title, location).
-- **Uptime:** 99.9% for the scraper controller.
+- **Volume:** Scraping 500,000+ job URLs daily.
+- **Deduplication Accuracy:** > 99% identification of cross-platform duplicates.
+- **Normalization Latency:** < 500ms per job listing.
